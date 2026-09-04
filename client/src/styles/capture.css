@@ -1,0 +1,28 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #f4f4f5; background: #09090b; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button { font: inherit; }
+.capture-body { min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 50% -15%, rgba(124,58,237,.22), transparent 35rem), #09090b; }
+#capture-root { display: grid; min-height: 100vh; place-items: center; padding: 24px; }
+.capture-card { width: min(100%, 470px); border: 1px solid rgba(255,255,255,.09); border-radius: 24px; padding: 26px 32px 28px; background: rgba(18,18,21,.88); box-shadow: 0 30px 90px rgba(0,0,0,.4); text-align: center; backdrop-filter: blur(20px); }
+.capture-brand { display: flex; align-items: center; gap: 8px; color: #8b8b95; font-size: 9px; font-weight: 850; letter-spacing: .13em; }
+.capture-logo { position: relative; width: 27px; height: 27px; border-radius: 8px; background: linear-gradient(145deg,#8b5cf6,#5b21b6); }
+.capture-logo::before { position: absolute; inset: 7px 5px 9px; border: 1.5px solid white; border-radius: 2px; content: ""; }
+.capture-visual { position: relative; display: grid; width: 150px; height: 130px; margin: 20px auto 2px; place-items: center; }
+.monitor { position: relative; z-index: 2; display: grid; width: 86px; height: 58px; place-items: center; border: 2px solid #a78bfa; border-radius: 8px; background: rgba(139,92,246,.08); box-shadow: 0 0 35px rgba(139,92,246,.15); }
+.monitor::before { position: absolute; bottom: -12px; width: 25px; height: 2px; border-radius: 2px; background: #a78bfa; content: ""; }
+.monitor::after { position: absolute; bottom: -10px; width: 2px; height: 9px; background: #a78bfa; content: ""; }
+.monitor span { width: 26px; height: 18px; border: 1px solid rgba(196,181,253,.45); border-radius: 3px; }
+.pulse { position: absolute; border: 1px solid rgba(167,139,250,.13); border-radius: 50%; }
+.pulse.one { inset: 14px; }.pulse.two { inset: -3px; }
+.is-live .monitor { border-color: #fb7185; box-shadow: 0 0 35px rgba(251,113,133,.18); }
+.is-live .monitor::before, .is-live .monitor::after { background: #fb7185; }
+.capture-kicker { margin: 8px 0 10px; color: #a78bfa; font-size: 9px; font-weight: 850; letter-spacing: .12em; }
+.capture-card h1 { margin: 0; font-size: clamp(25px, 6vw, 34px); letter-spacing: -.045em; }
+.capture-copy { max-width: 360px; margin: 13px auto 24px; color: #85858f; font-size: 13px; line-height: 1.6; }
+.capture-actions button { width: 100%; min-height: 48px; border: 0; border-radius: 11px; color: #18181b; background: #f4f4f5; font-weight: 780; cursor: pointer; }
+.capture-actions button:hover { background: white; }
+.capture-actions .capture-danger { color: white; background: #e11d48; }
+.capture-security { display: flex; align-items: flex-start; gap: 9px; margin-top: 18px; border-top: 1px solid rgba(255,255,255,.065); padding-top: 17px; color: #5f5f69; font-size: 9px; line-height: 1.5; text-align: left; }
+.capture-security span { color: #6d28d9; }.capture-security p { margin: 0; }
+@media (max-width: 500px) { #capture-root { padding: 12px; }.capture-card { padding: 23px 20px; } }

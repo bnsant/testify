@@ -1,0 +1,32 @@
+{
+  "name": "testify-discord-activity-screenshare",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Compartilhamento de tela privado cuja interface principal é uma Discord Activity.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently -k -n server,activity -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite --config client/vite.config.js",
+    "build": "vite build --config client/vite.config.js",
+    "start": "node server/index.js",
+    "check": "node scripts/check.js",
+    "register-command": "node scripts/register-command.js",
+    "test": "node test/all.test.js"
+  },
+  "engines": { "node": ">=18.18.0" },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.4.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.1",
+    "vite": "^6.1.0"
+  }
+}
