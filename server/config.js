@@ -10,14 +10,27 @@ function positiveInteger(value, fallback, name) {
 }
 
 function parseOrigins(value, clientId, publicBaseUrl) {
-  const origins = new Set((value || "").split(",").map((item) => item.trim()).filter(Boolean));
+  const origins = new Set();
+  for (const item of (value || "").split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    // Um Origin de request é sempre esquema+host; normaliza entradas sem esquema
+    // para que a comparação no upgrade do WebSocket realmente bata.
+    try { origins.add(new URL(/^https?:\/\//i.test(item) ? item : `https://${item}`).origin); }
+    catch { /* ignora entrada malformada */ }
+  }
   origins.add(new URL(publicBaseUrl).origin);
   if (clientId) origins.add(`https://${clientId}.discordsays.com`);
   return origins;
 }
 
+// Provedores (Railway etc.) muitas vezes expõem o host sem esquema. Assume HTTPS
+// quando faltar, para o `new URL()` não estourar com "Invalid URL".
+function normalizeBaseUrl(value) {
+  const trimmed = (value || "http://localhost:5173").trim().replace(/\/+$/, "");
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 export function loadConfig(env = process.env) {
-  const publicBaseUrl = (env.PUBLIC_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
+  const publicBaseUrl = normalizeBaseUrl(env.PUBLIC_BASE_URL);
   const parsedPublicUrl = new URL(publicBaseUrl);
   if (env.NODE_ENV === "production" && parsedPublicUrl.protocol !== "https:") {
     throw new Error("PUBLIC_BASE_URL precisa usar HTTPS em produção.");
