@@ -26,3 +26,14 @@ button { font: inherit; }
 .capture-security { display: flex; align-items: flex-start; gap: 9px; margin-top: 18px; border-top: 1px solid rgba(255,255,255,.065); padding-top: 17px; color: #5f5f69; font-size: 9px; line-height: 1.5; text-align: left; }
 .capture-security span { color: #6d28d9; }.capture-security p { margin: 0; }
 @media (max-width: 500px) { #capture-root { padding: 12px; }.capture-card { padding: 23px 20px; } }
+
+.capture-field { display: grid; gap: 8px; margin: 0 0 18px; text-align: left; color: #c4b5fd; font-size: 12px; }
+.capture-field select { width: 100%; padding: 12px; border-radius: 9px; border: 1px solid #3f3f46; background: #18181b; color: #fafafa; font: inherit; }
+.capture-check { display: flex; gap: 9px; align-items: center; text-align: left; margin: 13px 0; color: #a1a1aa; font-size: 12px; }
+.capture-check input { accent-color: #8b5cf6; }
+.capture-actions { margin-top: 18px; }
+.capture-stats { color: #a1a1aa; font-size: 11px; min-height: 1em; margin: 16px 0 0; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 4px; }
+
+.capture-check:has(#audio) { flex-wrap: wrap; }
+.capture-check:has(#audio)::after { content: 'Proteção antieco: tela inteira e janela do Discord ficam sempre sem áudio.'; margin-left: 24px; color: #8b8b95; font-size: 10px; line-height: 1.45; }

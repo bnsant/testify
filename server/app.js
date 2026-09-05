@@ -31,11 +31,12 @@ function bearerToken(request) {
   return match?.[1] || null;
 }
 
-export function createApp({ config, sessions, captureTokens, captureSessions, fetchImpl = fetch }) {
+export function createApp({ config, sessions, captureTokens, captureSessions, rooms, fetchImpl = fetch }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(activitySecurityHeaders);
   app.use(express.json({ limit: "16kb" }));
+  app.use("/api", (_request, response, next) => { response.set("Cache-Control", "no-store"); next(); });
 
   app.get("/health", (_request, response) => {
     response.json({ ok: true, discordConfigured: missingDiscordConfig(config).length === 0 });
@@ -46,7 +47,8 @@ export function createApp({ config, sessions, captureTokens, captureSessions, fe
       transport: "websocket-media",
       webRtcSupportedInActivity: false,
       maxViewers: 5,
-      rtcConfig: config.rtcConfig
+      protocolVersion: 2,
+      appName: "Testify"
     });
   });
 
@@ -102,9 +104,14 @@ export function createApp({ config, sessions, captureTokens, captureSessions, fe
   app.post("/api/capture-token", (request, response) => {
     const session = sessions.get(bearerToken(request));
     if (!session) return response.status(401).json({ error: "Sessão expirada." });
+    if (!rooms?.hasUser(session.instanceId, session.user.id)) return response.status(403).json({ error: "Entre na Activity antes de compartilhar." });
+    if (rooms.rooms.get(session.instanceId)?.broadcaster) return response.status(409).json({ error: "Já existe uma transmissão nesta sala." });
+    for (const [key, record] of captureTokens.records) {
+      if (record.value.user.id === session.user.id && record.value.instanceId === session.instanceId) captureTokens.records.delete(key);
+    }
     const token = captureTokens.issue({ user: session.user, instanceId: session.instanceId });
     response.set("Cache-Control", "no-store").json({
-      captureUrl: `${config.publicBaseUrl}/capture?token=${encodeURIComponent(token)}`,
+      captureUrl: `${config.publicBaseUrl}/capture#token=${encodeURIComponent(token)}`,
       expiresInSeconds: Math.floor(config.captureTokenTtlMs / 1000)
     });
   });
@@ -113,25 +120,26 @@ export function createApp({ config, sessions, captureTokens, captureSessions, fe
     const token = typeof request.body?.token === "string" ? request.body.token : "";
     const grant = captureTokens.consume(token);
     if (!grant) return response.status(401).json({ error: "Este link de captura expirou ou já foi usado." });
+    if (!rooms?.hasUser(grant.instanceId, grant.user.id)) return response.status(403).json({ error: "Sua Activity foi fechada. Reabra o Testify." });
     const captureSessionToken = captureSessions.issue(grant, config.sessionTtlMs);
     response.set("Cache-Control", "no-store").json({ captureSessionToken, user: grant.user });
   });
 
   if (fs.existsSync(config.distDirectory)) {
-    app.get("/capture", (_request, response) => {
+    app.get(["/capture", "/capture.html"], (_request, response) => {
       response.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
-      response.sendFile(path.join(config.distDirectory, "capture.html"));
+      response.set("Cache-Control", "no-store").sendFile(path.join(config.distDirectory, "capture.html"));
     });
     app.use(express.static(config.distDirectory, { index: false, maxAge: config.development ? 0 : "1h" }));
     app.use((request, response, next) => {
       if (request.method !== "GET" || request.path.startsWith("/api/") || request.path === "/ws") return next();
-      response.sendFile(path.join(config.distDirectory, "index.html"));
+      response.set("Cache-Control", "no-store").sendFile(path.join(config.distDirectory, "index.html"));
     });
   }
 
   app.use((error, _request, response, _next) => {
-    console.error("[HTTP]", error);
-    response.status(500).json({ error: "Erro interno." });
+    console.error("[HTTP]", error.type || error.name);
+    response.status(error.status === 400 || error.status === 413 ? error.status : 500).json({ error: "Requisição inválida ou erro interno." });
   });
   return app;
 }

@@ -45,7 +45,7 @@ export function loadConfig(env = process.env) {
     credential: env.TURN_PASSWORD || ""
   });
   return {
-    host: env.HOST || "127.0.0.1",
+    host: env.HOST || (env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1"),
     port: positiveInteger(env.PORT, 3001, "PORT"),
     publicBaseUrl,
     clientId,

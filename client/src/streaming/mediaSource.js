@@ -1,140 +1,141 @@
-// Safari/iOS não expõem `MediaSource` no iPhone, apenas `ManagedMediaSource`
-// (iOS 17.1+). A API é compatível o suficiente para uso ao vivo; as diferenças
-// tratadas aqui são: exigir `disableRemotePlayback` no <video> antes de anexar e
-// só crescer o buffer enquanto o navegador estiver pedindo dados.
-const MediaSourceImpl =
-  (typeof window !== "undefined" && (window.ManagedMediaSource || window.MediaSource)) || null;
-
-// Alvo de atraso entre o player e a borda ao vivo. Folga suficiente para o jitter
-// da rede, apertada o bastante para não parecer gravado. Acima de LIVE_MAX o
-// player salta para a borda; entre o alvo e o máximo ele acelera de leve,
-// proporcional ao quanto está atrasado, para queimar o excesso em poucos
-// segundos sem soar acelerado.
-const LIVE_TARGET_SECONDS = 0.8;
-const LIVE_MAX_SECONDS = 2.2;
-const MAX_CATCHUP_RATE = 1.15;
-const BUFFER_BEHIND_SECONDS = 8;
-
-function isContainerSupported(mimeType) {
-  return Boolean(MediaSourceImpl?.isTypeSupported?.(mimeType));
-}
+// Prefer the live edge over uninterrupted playback. WebSocket is ordered, so
+// stale media must be abandoned instead of being played several seconds late.
+const LIVE_TARGET_SECONDS = 0.65;
+const LIVE_MAX_SECONDS = 1.35;
+const MAX_TRANSPORT_MS = 1_100;
+const MAX_QUEUE_BYTES = 1536 * 1024;
+const MAX_QUEUE_CHUNKS = 12;
 
 export class MediaSourcePlayer {
-  constructor(video) {
-    this.video = video;
-    this.mediaSource = null;
-    this.sourceBuffer = null;
-    this.queue = [];
-    this.objectUrl = null;
-    this.streaming = true;
-    this.syncTimer = null;
+  constructor(video, { onError = () => {}, onStats = () => {}, onLatencyExceeded = onError } = {}) {
+    this.video = video; this.onError = onError; this.onStats = onStats; this.onLatencyExceeded = onLatencyExceeded;
+    this.queue = []; this.queuedBytes = 0; this.generation = 0;
+    this.staleChunks = 0; this.transportMs = 0;
   }
-
   start(mimeType) {
     this.destroy();
-    if (!MediaSourceImpl || !isContainerSupported(mimeType)) {
-      throw new Error(`O player não suporta ${mimeType}.`);
-    }
-    this.streaming = true;
-    this.mediaSource = new MediaSourceImpl();
-    // Sem isto o ManagedMediaSource lança ao anexar no Safari/iOS.
-    try { this.video.disableRemotePlayback = true; } catch { /* ignore */ }
-    this.objectUrl = URL.createObjectURL(this.mediaSource);
+    const Impl = globalThis.MediaSource || globalThis.ManagedMediaSource;
+    if (!Impl?.isTypeSupported(mimeType)) throw new Error("Este dispositivo não reproduz o formato da transmissão.");
+    const source = new Impl();
+    const generation = this.generation;
+    this.mediaSource = source;
+    this.video.disableRemotePlayback = true;
     this.video.srcObject = null;
+    this.objectUrl = URL.createObjectURL(source);
     this.video.src = this.objectUrl;
-
-    this.mediaSource.addEventListener("sourceopen", () => {
-      if (this.mediaSource.readyState !== "open") return;
-      URL.revokeObjectURL(this.objectUrl);
-      this.objectUrl = null;
-      this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
-      this.sourceBuffer.mode = "sequence";
-      this.sourceBuffer.addEventListener("updateend", () => this.flush());
-      this.flush();
-    }, { once: true });
-
-    // Hints do ManagedMediaSource: pausa/retoma a anexação para poupar memória e
-    // bateria no celular. Em MediaSource comum estes eventos nunca disparam.
-    this.mediaSource.addEventListener("startstreaming", () => { this.streaming = true; this.flush(); });
-    this.mediaSource.addEventListener("endstreaming", () => { this.streaming = false; });
-
+    this.streaming = true;
+    this.failed = false;
+    this.startedAt = Date.now();
+    this.lastProgressAt = Date.now();
+    this.lastTime = 0;
     this.primed = false;
-    // Correção num timer curto — rápido o suficiente para não deixar o atraso
-    // acumular, espaçado o suficiente para não reagir a cada hiccup.
-    this.syncTimer = setInterval(() => this.syncToLiveEdge(), 700);
-
+    this.staleChunks = 0;
+    this.transportMs = 0;
+    this.onVideoError = () => this.fail(new Error("Falha ao decodificar a transmissão. Ressincronizando…"));
+    this.video.addEventListener("error", this.onVideoError);
+    source.addEventListener("sourceopen", () => {
+      if (generation !== this.generation || source.readyState !== "open") return;
+      try {
+        this.sourceBuffer = source.addSourceBuffer(mimeType);
+        // Preserve muxed timestamps. Sequence mode can collapse audio/video timing.
+        this.sourceBuffer.mode = "segments";
+        this.sourceBuffer.addEventListener("error", () => { if (generation === this.generation) this.fail(new Error("Fragmento de vídeo inválido. Ressincronizando…")); });
+        this.sourceBuffer.addEventListener("updateend", () => this.flush());
+        this.flush();
+      } catch (error) { this.fail(error); }
+    }, { once: true });
+    source.addEventListener("startstreaming", () => { this.streaming = true; this.flush(); });
+    source.addEventListener("endstreaming", () => { this.streaming = false; });
+    this.syncTimer = setInterval(() => this.syncToLiveEdge(), 500);
     this.video.play().catch(() => {});
   }
-
-  push(chunk) {
-    this.queue.push(new Uint8Array(chunk));
-    // Enquanto o navegador não pede dados, limita a fila para não estourar a
-    // memória numa transmissão longa; ao retomar, parte do próximo fragmento.
-    if (!this.streaming && this.queue.length > 240) this.queue.splice(0, this.queue.length - 240);
-    this.flush();
+  fail(error) {
+    if (this.failed || !this.mediaSource) return;
+    this.failed = true;
+    this.queue = []; this.queuedBytes = 0;
+    this.onError(error);
   }
-
-  flush() {
-    if (this.mediaSource?.readyState !== "open") return;
-    if (!this.sourceBuffer || this.sourceBuffer.updating || !this.streaming || !this.queue.length) return;
-    try { this.sourceBuffer.appendBuffer(this.queue.shift()); }
-    catch (error) {
-      if (error.name === "QuotaExceededError" && this.sourceBuffer.buffered.length) {
-        const end = this.sourceBuffer.buffered.end(0);
-        this.sourceBuffer.remove(0, Math.max(0, end - 20));
-      } else throw error;
+  push(packet) {
+    if (this.failed || !this.mediaSource) return;
+    const chunk = packet?.data || packet;
+    const transportMs = Number(packet?.transportMs);
+    if (Number.isFinite(transportMs)) {
+      this.transportMs = Math.max(0, transportMs);
+      this.staleChunks = this.transportMs > MAX_TRANSPORT_MS ? this.staleChunks + 1 : 0;
+      if (this.staleChunks >= 2) {
+        this.failed = true;
+        this.queue = []; this.queuedBytes = 0;
+        this.onLatencyExceeded(new Error('Player atrasado. Ressincronizando...'));
+        return;
+      }
     }
-  }
-
-  // Mantém a reprodução perto da borda ao vivo. Ao vivo, o buffer à frente do
-  // cursor É a latência; deixá-lo crescer é o "delay de 5 s". Por isso: assim que
-  // dá pra tocar, pula pra borda; depois só deixa acelerar de leve ou salta se
-  // estourar o teto.
-  syncToLiveEdge() {
-    const buffer = this.sourceBuffer;
-    const video = this.video;
-    if (!buffer || !video || video.seeking || this.mediaSource?.readyState !== "open") return;
-    if (!buffer.buffered.length) return;
-
-    const liveEdge = buffer.buffered.end(buffer.buffered.length - 1);
-    const start = buffer.buffered.start(0);
-    const seekable = liveEdge - LIVE_TARGET_SECONDS;
-    const latency = liveEdge - video.currentTime;
-
-    // Primeiro sync após ter mídia suficiente: cola na borda de uma vez.
-    if (!this.primed && video.readyState >= 2 && liveEdge - start > LIVE_TARGET_SECONDS) {
-      this.primed = true;
-      try { video.currentTime = Math.max(start + 0.05, seekable); } catch { /* ignore */ }
-      video.play().catch(() => {});
+    const bytes = new Uint8Array(chunk);
+    if (this.queuedBytes + bytes.byteLength > MAX_QUEUE_BYTES || this.queue.length >= MAX_QUEUE_CHUNKS) {
+      this.failed = true;
+      this.queue = []; this.queuedBytes = 0;
+      this.onLatencyExceeded(new Error('Player atrasado. Ressincronizando...'));
       return;
     }
-
-    if (video.currentTime < start - 0.1 || latency > LIVE_MAX_SECONDS) {
-      try { video.currentTime = Math.max(start + 0.05, seekable); } catch { /* ignore */ }
-      video.playbackRate = 1;
-    } else if (latency > LIVE_TARGET_SECONDS + 0.25) {
-      // Proporcional: quanto mais atrás, mais rápido — até MAX_CATCHUP_RATE.
-      const over = latency - LIVE_TARGET_SECONDS;
-      video.playbackRate = Math.min(MAX_CATCHUP_RATE, 1 + over * 0.3);
-    } else if (video.playbackRate !== 1) {
-      video.playbackRate = 1;
-    }
-
-    if (!buffer.updating && video.currentTime - start > BUFFER_BEHIND_SECONDS) {
-      try { buffer.remove(start, video.currentTime - BUFFER_BEHIND_SECONDS / 2); } catch { /* ignore */ }
+    this.queue.push(bytes); this.queuedBytes += bytes.byteLength;
+    this.flush();
+  }
+  flush() {
+    const buffer = this.sourceBuffer;
+    if (this.failed || this.mediaSource?.readyState !== "open" || !buffer || buffer.updating || !this.streaming || !this.queue.length) return;
+    const chunk = this.queue[0];
+    try {
+      buffer.appendBuffer(chunk);
+      this.queue.shift(); this.queuedBytes -= chunk.byteLength;
+    } catch (error) {
+      if (error.name === "QuotaExceededError" && buffer.buffered.length && this.video.currentTime - buffer.buffered.start(0) > 2) {
+        try { buffer.remove(buffer.buffered.start(0), this.video.currentTime - 1); }
+        catch (removeError) { this.fail(removeError); }
+        // Keep the SAME chunk queued for the updateend retry.
+      } else this.fail(error);
     }
   }
-
+  syncToLiveEdge() {
+    const buffer = this.sourceBuffer, video = this.video;
+    if (this.failed) return;
+    if (!buffer || this.mediaSource?.readyState !== "open") {
+      if (Date.now() - this.startedAt > 12_000 && document.visibilityState !== "hidden") {
+        this.fail(new Error("O player não iniciou. Ressincronizando…"));
+      }
+      return;
+    }
+    const ranges = buffer.buffered;
+    if (video.currentTime > this.lastTime + 0.01) {
+      this.lastTime = video.currentTime; this.lastProgressAt = Date.now();
+    }
+    if (Date.now() - this.lastProgressAt > 20_000 && document.visibilityState !== "hidden") {
+      this.fail(new Error("A transmissão parou de avançar. Ressincronizando…")); return;
+    }
+    if (!ranges.length || video.seeking) return;
+    const start = ranges.start(ranges.length - 1), edge = ranges.end(ranges.length - 1);
+    const behind = Math.max(0, edge - video.currentTime);
+    if ((!this.primed && edge - start > LIVE_TARGET_SECONDS) || video.currentTime < start || behind > LIVE_MAX_SECONDS) {
+      try { video.currentTime = Math.max(start, edge - LIVE_TARGET_SECONDS); } catch { /* seek on next tick */ }
+      this.primed = true;
+      video.play().catch(() => {});
+    }
+    video.playbackRate = behind > LIVE_TARGET_SECONDS + 0.25 && behind <= LIVE_MAX_SECONDS ? 1.08 : 1;
+    if (!buffer.updating && video.currentTime - ranges.start(0) > 8) {
+      try { buffer.remove(ranges.start(0), video.currentTime - 4); } catch { /* retry */ }
+    }
+    const quality = video.getVideoPlaybackQuality?.();
+    this.onStats({ bufferSeconds: behind, transportMs: this.transportMs, stalled: video.readyState < 3,
+      decodedFrames: quality?.totalVideoFrames || 0, droppedFrames: quality?.droppedVideoFrames || 0 });
+  }
   destroy() {
-    this.queue = [];
-    this.streaming = true;
-    this.primed = false;
-    if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = null; }
-    if (this.sourceBuffer?.updating) this.sourceBuffer.abort();
+    this.generation++;
+    clearInterval(this.syncTimer);
+    if (this.onVideoError) this.video.removeEventListener("error", this.onVideoError);
+    try { if (this.mediaSource?.readyState === "open" && this.sourceBuffer?.updating) this.sourceBuffer.abort(); } catch {}
+    this.mediaSource = null; this.sourceBuffer = null;
+    this.queue = []; this.queuedBytes = 0;
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
-    if (this.video) { this.video.removeAttribute("src"); this.video.load(); this.video.playbackRate = 1; }
-    this.mediaSource = null;
-    this.sourceBuffer = null;
     this.objectUrl = null;
+    this.video.removeAttribute("src");
+    this.video.load(); this.video.playbackRate = 1;
   }
 }

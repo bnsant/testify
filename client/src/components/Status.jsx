@@ -1,5 +1,5 @@
-export default function Status({ connected, broadcaster, currentUserId }) {
-  const text = !connected
+export default function Status({ connected, broadcaster, currentUserId, preview }) {
+  const text = preview ? "Prévia no navegador" : !connected
     ? "Reconectando…"
     : !broadcaster
       ? "Pronto para transmitir"

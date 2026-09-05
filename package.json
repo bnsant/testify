@@ -13,9 +13,13 @@
     "start": "node server/index.js",
     "check": "node scripts/check.js",
     "register-command": "node scripts/register-command.js",
-    "test": "node test/all.test.js"
+    "test": "node test/all.test.js",
+    "doctor": "node scripts/doctor.js",
+    "test:browser": "node scripts/browser-test.js"
   },
-  "engines": { "node": ">=18.18.0" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.4.0",
     "dotenv": "^17.2.1",

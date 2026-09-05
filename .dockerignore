@@ -5,3 +5,6 @@ dist
 .tools
 data
 test
+
+.env.*
+test-results

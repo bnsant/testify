@@ -5,3 +5,7 @@ dist/
 data/
 npm-debug.log*
 .DS_Store
+
+.env.local
+.env.*.local
+test-results/

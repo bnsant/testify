@@ -1,37 +1,19 @@
 import "dotenv/config";
-
-// Registra (ou atualiza) o Entry Point command que o Discord exige para iniciar
-// a Activity. O Discord deixou de criar esse comando automaticamente, então sem
-// ele o launcher mostra "seu app habilitou atividades, mas não possui comandos".
-// Idempotente: rodar de novo apenas sobrescreve o mesmo comando.
-
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local", override: true, quiet: true });
 const clientId = (process.env.DISCORD_CLIENT_ID || process.env.VITE_DISCORD_CLIENT_ID || "").trim();
 const botToken = (process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || "").trim();
-
-if (!clientId || !botToken) {
-  console.error("Defina DISCORD_CLIENT_ID e DISCORD_BOT_TOKEN no .env antes de rodar.");
-  process.exit(1);
-}
-
-const command = {
-  name: "launch",
-  description: "Abrir Testify",
-  type: 4, // PRIMARY_ENTRY_POINT
-  handler: 2, // DISCORD_LAUNCH_ACTIVITY (o Discord abre a Activity, sem app interaction)
-  integration_types: [0, 1], // guild install + user install
-  contexts: [0, 1, 2] // guild, bot DM, GDM/DM
-};
-
-const response = await fetch(`https://discord.com/api/v10/applications/${clientId}/commands`, {
-  method: "PUT",
-  headers: { Authorization: `Bot ${botToken}`, "Content-Type": "application/json" },
-  body: JSON.stringify([command])
+if (!clientId || !botToken) throw new Error("Configure DISCORD_CLIENT_ID e DISCORD_BOT_TOKEN.");
+const url = `https://discord.com/api/v10/applications/${clientId}/commands`;
+const headers = { Authorization: `Bot ${botToken}`, "Content-Type": "application/json" };
+const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+if (!response.ok) throw new Error(`Discord respondeu HTTP ${response.status} ao consultar comandos.`);
+const existing = (await response.json()).find((command) => command.type === 4);
+const command = { name: existing?.name || "launch", description: "Abrir Testify", type: 4,
+  handler: 2, integration_types: [0, 1], contexts: [0, 1, 2] };
+// Never bulk-overwrite the bot's other commands.
+const saved = await fetch(existing ? `${url}/${existing.id}` : url, {
+  method: existing ? "PATCH" : "POST", headers, body: JSON.stringify(command), signal: AbortSignal.timeout(15_000)
 });
-
-const body = await response.text();
-if (!response.ok) {
-  console.error(`Discord respondeu ${response.status}:`, body);
-  process.exit(1);
-}
-
-console.log("Entry Point command registrado. Reinicie o Discord para vê-lo no launcher.");
+if (!saved.ok) throw new Error(`Discord respondeu HTTP ${saved.status} ao registrar o ponto de entrada.`);
+console.log("Ponto de entrada do Testify configurado. Os demais comandos foram preservados.");

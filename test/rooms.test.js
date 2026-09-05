@@ -22,3 +22,13 @@ test("limita a cinco viewers", () => {
   const room = rooms.startBroadcast("i-test-room-456", { connectionId: "capture", user: { id: "owner" } });
   assert.equal(rooms.viewerCount(room), 5);
 });
+
+test("o mesmo transmissor substitui o socket sem encerrar a sala", () => {
+  const rooms = new RoomRegistry();
+  rooms.addViewer("i-test-room-replace", "owner-view", { user: { id: "owner" } });
+  const room = rooms.startBroadcast("i-test-room-replace", { connectionId: "old", user: { id: "owner" } });
+  rooms.startBroadcast("i-test-room-replace", { connectionId: "fresh", user: { id: "owner" } });
+  assert.equal(room.broadcaster.connectionId, "fresh");
+  assert.equal(rooms.removeConnection("old"), null);
+  assert.equal(room.broadcaster.connectionId, "fresh");
+});

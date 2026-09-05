@@ -1,7 +1,7 @@
 const DISCORD_API = "https://discord.com/api/v10";
 
 async function discordJson(fetchImpl, url, options) {
-  const response = await fetchImpl(url, options);
+  const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(15_000) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(body.message || `Discord respondeu HTTP ${response.status}.`);

@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 # O client ID é embutido no bundle do cliente pelo Vite em tempo de build. O
 # Railway injeta como build-arg qualquer ARG com o mesmo nome de uma variável do
@@ -11,9 +11,10 @@ ENV DISCORD_CLIENT_ID=$DISCORD_CLIENT_ID
 COPY package*.json ./
 RUN npm ci
 COPY client ./client
+COPY shared ./shared
 RUN npm run build
 
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # Em container tem que escutar em todas as interfaces; o default 127.0.0.1 do
@@ -22,6 +23,7 @@ ENV HOST=0.0.0.0
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY server ./server
+COPY shared ./shared
 COPY --from=build /app/dist ./dist
 USER node
 EXPOSE 3001

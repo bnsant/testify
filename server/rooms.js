@@ -1,69 +1,66 @@
 import { MAX_VIEWERS } from "./protocol.js";
 
 export class RoomRegistry {
-  constructor() {
-    this.rooms = new Map();
-  }
-
+  constructor() { this.rooms = new Map(); }
   getOrCreate(instanceId) {
     let room = this.rooms.get(instanceId);
     if (!room) {
-      room = { instanceId, broadcaster: null, viewers: new Map(), createdAt: Date.now(), initSegment: null };
+      room = { instanceId, broadcaster: null, viewers: new Map(), createdAt: Date.now() };
       this.rooms.set(instanceId, room);
     }
     return room;
   }
-
+  hasUser(instanceId, userId) {
+    return [...(this.rooms.get(instanceId)?.viewers.values() || [])].some((viewer) => viewer.user?.id === userId);
+  }
   addViewer(instanceId, connectionId, viewer) {
     const room = this.getOrCreate(instanceId);
-    // Antes de existir broadcaster, uma das seis Activities poderá se tornar o
-    // transmissor. Depois disso, contam-se até cinco pessoas além dele.
+    // One Activity socket per user: reconnects replace a stale connection.
+    const previous = [...room.viewers.entries()].find(([, entry]) => entry.user?.id && entry.user.id === viewer.user?.id);
+    if (previous) {
+      room.viewers.delete(previous[0]);
+      previous[1].socket?.close?.(1008, "Activity aberta em outra janela.");
+    }
     const projected = [...room.viewers.values(), viewer];
-    const broadcasterId = room.broadcaster?.user.id;
-    const viewerIds = new Set(projected.map((entry) => entry.user?.id).filter((id) => id && id !== broadcasterId));
-    if ((!broadcasterId && room.viewers.size >= MAX_VIEWERS + 1) || (broadcasterId && viewerIds.size > MAX_VIEWERS)) {
+    const owner = room.broadcaster?.user.id;
+    const count = new Set(projected.map((entry) => entry.user?.id).filter((id) => id && id !== owner)).size;
+    if ((!owner && room.viewers.size >= MAX_VIEWERS + 1) || (owner && count > MAX_VIEWERS)) {
       throw new Error(`Esta transmissão já tem ${MAX_VIEWERS} espectadores.`);
     }
     room.viewers.set(connectionId, viewer);
     return room;
   }
-
   startBroadcast(instanceId, broadcaster) {
     const room = this.getOrCreate(instanceId);
+    if (room.broadcaster && room.broadcaster.connectionId !== broadcaster.connectionId &&
+        room.broadcaster.user?.id === broadcaster.user?.id) {
+      room.broadcaster = broadcaster;
+      return room;
+    }
     if (room.broadcaster && room.broadcaster.connectionId !== broadcaster.connectionId) {
       throw new Error("Outra pessoa já está transmitindo nesta instância.");
     }
-    const viewerIds = new Set([...room.viewers.values()].map((viewer) => viewer.user?.id).filter((id) => id && id !== broadcaster.user.id));
-    if (viewerIds.size > MAX_VIEWERS) throw new Error(`Esta transmissão já tem mais de ${MAX_VIEWERS} espectadores.`);
+    const viewers = new Set([...room.viewers.values()].map((v) => v.user?.id).filter((id) => id && id !== broadcaster.user.id));
+    if (viewers.size > MAX_VIEWERS) throw new Error(`Esta transmissão já tem mais de ${MAX_VIEWERS} espectadores.`);
     room.broadcaster = broadcaster;
-    room.initSegment = null;
     return room;
   }
-
   viewerCount(room) {
-    const broadcasterId = room.broadcaster?.user.id;
-    return new Set([...room.viewers.values()].map((viewer) => viewer.user?.id).filter((id) => id && id !== broadcasterId)).size;
+    return new Set([...room.viewers.values()].map((v) => v.user?.id).filter((id) => id && id !== room.broadcaster?.user.id)).size;
   }
-
   stopBroadcast(instanceId, connectionId) {
     const room = this.rooms.get(instanceId);
     if (!room || room.broadcaster?.connectionId !== connectionId) return null;
     room.broadcaster = null;
-    room.initSegment = null;
-    if (room.viewers.size === 0) this.rooms.delete(instanceId);
+    if (!room.viewers.size) this.rooms.delete(instanceId);
     return room;
   }
-
   removeConnection(connectionId) {
     for (const [instanceId, room] of this.rooms) {
-      let broadcasterStopped = false;
-      if (room.broadcaster?.connectionId === connectionId) {
-        room.broadcaster = null;
-        room.initSegment = null;
-        broadcasterStopped = true;
-      }
+      const broadcasterStopped = room.broadcaster?.connectionId === connectionId;
+      if (broadcasterStopped) room.broadcaster = null;
       const viewerRemoved = room.viewers.delete(connectionId);
-      if (!room.broadcaster && room.viewers.size === 0) this.rooms.delete(instanceId);
+      if (!room.broadcaster && !room.viewers.size) this.rooms.delete(instanceId);
       if (broadcasterStopped || viewerRemoved) return { room, broadcasterStopped };
     }
     return null;
